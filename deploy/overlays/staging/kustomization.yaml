@@ -2,30 +2,26 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: payments
 resources:
-- ../../base
-
+  - ../../base
 labels:
-- pairs:
-    env: staging
-  includeSelectors: false
-
+  - pairs:
+      env: staging
+    includeSelectors: false
 # release.yaml: which commit/PR this image came from. CI rewrites it on every PR
 # push; Argo Rollouts notifications forward it to the AI SRE.
 patches:
-- path: release.yaml
-
+  - path: release.yaml
 images:
-- name: payment
-  newName: ghcr.io/shivaylamba/scn-payment
-  newTag: v1.0.0
-- name: inventory
-  newName: ghcr.io/shivaylamba/scn-inventory
-  newTag: v1.0.0
-- name: loadgen
-  newName: ghcr.io/shivaylamba/scn-loadgen
-  newTag: v1.0.0
-
+  - name: payment
+    newName: ghcr.io/shivaylamba/scn-payment
+    newTag: sha-78898b8
+  - name: inventory
+    newName: ghcr.io/shivaylamba/scn-inventory
+    newTag: v1.0.0
+  - name: loadgen
+    newName: ghcr.io/shivaylamba/scn-loadgen
+    newTag: v1.0.0
 configMapGenerator:
-- name: loadgen
-  envs:
-  - loadgen.env
+  - name: loadgen
+    envs:
+      - loadgen.env
