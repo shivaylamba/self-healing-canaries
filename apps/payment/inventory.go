@@ -22,10 +22,16 @@ func newInventoryClient(baseURL string) *inventoryClient {
 	}
 }
 
-// stockV2 is the v2 response. v1 is deprecated; v2 skips server-side aggregation.
+type warehouseStock struct {
+	Available int `json:"available"`
+}
+
+// stockV2 is the v2 response. v2 returns top-level availability for a single
+// warehouse and per-warehouse availability for a multi-warehouse SKU.
 type stockV2 struct {
-	SKU       string `json:"sku"`
-	Available *int   `json:"available"`
+	SKU        string           `json:"sku"`
+	Available  *int             `json:"available"`
+	Warehouses []warehouseStock `json:"warehouses"`
 }
 
 // Available returns the total sellable quantity for sku.
@@ -46,8 +52,15 @@ func (c *inventoryClient) Available(ctx context.Context, sku string) (int, error
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return 0, fmt.Errorf("inventory v2: decode: %w", err)
 	}
-	if s.Available == nil {
-		return 0, fmt.Errorf("inventory v2: response for sku %s has no 'available' field", sku)
+	if s.Available != nil {
+		return *s.Available, nil
 	}
-	return *s.Available, nil
+	if len(s.Warehouses) == 0 {
+		return 0, fmt.Errorf("inventory v2: response for sku %s has neither 'available' nor 'warehouses'", sku)
+	}
+	available := 0
+	for _, warehouse := range s.Warehouses {
+		available += warehouse.Available
+	}
+	return available, nil
 }
