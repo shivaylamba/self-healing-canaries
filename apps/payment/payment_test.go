@@ -33,11 +33,19 @@ func TestInventoryAvailableMultiWarehouse(t *testing.T) {
 
 func TestToMinorUnits(t *testing.T) {
 	for _, tc := range []struct {
-		amount float64
-		want   int64
-	}{{12.50, 1250}, {0.99, 99}, {299.99, 29999}} {
-		if got := toMinorUnits(tc.amount); got != tc.want {
-			t.Errorf("toMinorUnits(%v) = %d; want %d", tc.amount, got, tc.want)
+		amount   float64
+		currency string
+		want     int64
+	}{
+		{12.50, "USD", 1250},
+		{0.99, "USD", 99},
+		{299.99, "EUR", 29999},
+		{2400, "JPY", 2400},
+		{12000, "KRW", 12000},
+		{2400, "jpy", 2400},
+	} {
+		if got := toMinorUnits(tc.amount, tc.currency); got != tc.want {
+			t.Errorf("toMinorUnits(%v, %s) = %d; want %d", tc.amount, tc.currency, got, tc.want)
 		}
 	}
 }
@@ -49,5 +57,15 @@ func TestChargeUSD(t *testing.T) {
 	}
 	if c.AmountMinor != 1250 {
 		t.Fatalf("AmountMinor = %d; want 1250", c.AmountMinor)
+	}
+}
+
+func TestChargeJPY(t *testing.T) {
+	c, err := charge(context.Background(), 2400, "JPY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AmountMinor != 2400 {
+		t.Fatalf("AmountMinor = %d; want 2400", c.AmountMinor)
 	}
 }
