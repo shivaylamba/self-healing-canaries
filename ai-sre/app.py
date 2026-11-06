@@ -7,6 +7,7 @@
   POST /hitl/policy     AURA's HITL webhook: allow or deny each GitHub write (guardrail 2).
   /ledger/mcp           The release ledger as an MCP server, for AURA.
   GET  /api/state       Ledger + investigations as JSON.
+  GET  /api/incidents   Incident memory (when INCIDENTS_ENABLED=true); /api/incidents/{id} with timeline.
   GET  /                Live page for the stage: ledger and the agent's steps.
 """
 import asyncio
@@ -22,13 +23,35 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+import incidents as inc_lib
+import policy
+import skills as skill_lib
 from agent import DRY_RUN, GITHUB_REPO, MODEL, investigate
+from changes import ChangeTracker
+from incident_service import IncidentService
 from ledger import Ledger
+from patterns import LokiReader, PatternScanner
+from revert import Reverter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("ai-sre")
 
 ledger = Ledger(os.environ.get("LEDGER_PATH", "/data/ledger.db"))
+
+# ── Incident memory (docs/prd-incident-memory.md). Off by default: the demo is unchanged. ──
+INCIDENTS_ENABLED = os.environ.get("INCIDENTS_ENABLED", "false").lower() == "true"
+incidents: IncidentService | None = None
+if INCIDENTS_ENABLED:
+    _token = os.environ.get("GITHUB_TOKEN", "")
+    _grafana = os.environ.get("GRAFANA_URL")
+    incidents = IncidentService(
+        ledger,
+        tracker=ChangeTracker(ledger, GITHUB_REPO, _token) if _token else None,
+        scanner=PatternScanner(ledger, LokiReader(_grafana, os.environ.get("GRAFANA_USERNAME", "admin"),
+                                                  os.environ.get("GRAFANA_PASSWORD", "admin")),
+                               window_s=int(os.environ.get("PATTERN_SCAN_SECS", "60"))) if _grafana else None,
+        reverter=Reverter(GITHUB_REPO, _token) if _token else None,
+    )
 
 # ── The release ledger as an MCP server (AURA connects to localhost:8080/ledger/mcp) ──
 ledger_mcp = FastMCP(
@@ -55,19 +78,89 @@ def compare_environments(image: str) -> str:
     return json.dumps({"image": image, "verdicts_by_env": summary, "rows": rows}, default=str)
 
 
+def _need_incidents() -> str | None:
+    return None if incidents else json.dumps({"error": "incident memory is disabled (INCIDENTS_ENABLED=false)"})
+
+
+@ledger_mcp.tool()
+def get_incident(incident_id: int) -> str:
+    """One incident: status, attribution (hash|temporal), signature, matched incident, skill,
+    fix/revert PRs, and its timeline of events."""
+    if (off := _need_incidents()):
+        return off
+    inc = ledger.incident(incident_id)
+    if not inc:
+        return json.dumps({"error": f"no incident #{incident_id}"})
+    return json.dumps({**inc, "events": ledger.incident_events(incident_id)}, default=str)
+
+
+@ledger_mcp.tool()
+def find_similar_incidents(incident_id: int, limit: int = 3) -> str:
+    """Past incidents (resolved or guarded) whose signature resembles this one, best first,
+    with their root cause, fix PR and how they were resolved. Treat them as hypotheses to verify."""
+    if (off := _need_incidents()):
+        return off
+    inc = ledger.incident(incident_id)
+    if not inc:
+        return json.dumps({"error": f"no incident #{incident_id}"})
+    past = [i for i in ledger.closed_incidents() if i["id"] != incident_id]
+    matches = inc_lib.find_similar(inc["signature"], past, k=limit)
+    return json.dumps([incidents._with_root_cause(m) for m in matches], default=str)
+
+
+@ledger_mcp.tool()
+def get_log_patterns(env: str, pod_hash: str) -> str:
+    """Error-log templates seen on one ReplicaSet (pod-template-hash), with counts and the
+    business slices (currency, region, SKU) they concentrate in."""
+    if (off := _need_incidents()):
+        return off
+    return json.dumps(ledger.patterns_for_hash(env, pod_hash), default=str)
+
+
+@ledger_mcp.tool()
+def get_recent_changes(hours: int = 24) -> str:
+    """Commits on main in the last N hours: files, kind of change (code/config/deploy/infra/test),
+    PR, and whether an automatic revert would be safe."""
+    if (off := _need_incidents()):
+        return off
+    return json.dumps(ledger.recent_changes(time.time() - hours * 3600), default=str)
+
+
+@ledger_mcp.tool()
+def list_skills() -> str:
+    """The specialised debugging skills available, with what each one is for."""
+    return json.dumps([{"name": s["name"], "summary": s.get("summary", "")} for s in skill_lib.load()])
+
+
+@ledger_mcp.tool()
+def get_skill(name: str) -> str:
+    """The full playbook of one skill."""
+    s = skill_lib.get(name)
+    return s["body"] if s else json.dumps({"error": f"no skill {name}"})
+
+
 _ledger_app = ledger_mcp.streamable_http_app()
 
 
 @contextlib.asynccontextmanager
 async def lifespan(_app):
+    loops = []
+    if incidents and incidents.tracker:
+        loops.append(asyncio.create_task(incidents.changes_loop(int(os.environ.get("CHANGES_POLL_SECS", "60")))))
+    if incidents and incidents.scanner:
+        loops.append(asyncio.create_task(incidents.scan_loop(int(os.environ.get("PATTERN_SCAN_SECS", "60")),
+                                                             lambda ev, ctx: start(ev, force=True, ctx=ctx))))
     async with ledger_mcp.session_manager.run():
         yield
+    for t in loops:
+        t.cancel()
 
 
 app = FastAPI(title="AI SRE", lifespan=lifespan)
 app.mount("/ledger", _ledger_app)
 _tasks: set[asyncio.Task] = set()
 _active: set[int] = set()   # investigations in flight, so policy decisions show up on stage
+_diagnosis_only: set[int] = set()   # in-flight investigations of time-correlated incidents: no writes
 
 REQUIRED = ("event", "env", "image")
 
@@ -82,40 +175,43 @@ async def rollout_hook(req: Request):
 
     if ev["event"] == "completed":
         ledger.record(ev, "passed")
+        if incidents:
+            _spawn(incidents.on_completed(ev))
         return {"recorded": "passed"}
 
     if ev["event"] == "aborted":
         ledger.record(ev, "failed")
+        if incidents:
+            if (prior := ledger.recent_investigation(ev["env"], ev["image"])):
+                return {"skipped": prior["id"]}
+            _spawn(_abort_with_incident(ev))
+            return {"incident": "opening"}
         return start(ev)
 
     return {"ignored": ev["event"]}
 
 
+def _spawn(coro) -> None:
+    t = asyncio.create_task(coro)
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+
+
+async def _abort_with_incident(ev: dict) -> None:
+    try:
+        ctx = await incidents.on_abort(ev)
+    except Exception:  # noqa: BLE001 — the incident system must never block the investigation
+        log.exception("incident system failed; investigating without it")
+        ctx = None
+    start(ev, ctx=ctx)
+
+
 # ── Guardrail 2: AURA's HITL webhook. Every GitHub write is parked until this answers. ──
-PROTECTED_BRANCHES = {"main", "master"}
-PROTECTED_PATHS = (".github/", "deploy/overlays/prod/", "demo/", "apps/payment/pspsandbox/")
-
-
 def _policy(tool: str, a: dict) -> str | None:
-    """Return a denial reason, or None to allow."""
-    if DRY_RUN:
-        return "dry-run mode: GitHub writes are disabled"
-    repo = f"{a.get('owner', '')}/{a.get('repo', '')}"
-    if a.get("owner") and repo.lower() != GITHUB_REPO.lower():
-        return f"only {GITHUB_REPO} may be changed, not {repo}"
-    branch = a.get("branch") if tool != "create_pull_request" else a.get("head")
-    if tool in ("push_files", "create_or_update_file", "create_branch", "create_pull_request"):
-        if not branch:
-            return "a target branch is required"
-        if branch.split(":")[-1] in PROTECTED_BRANCHES:
-            return f"writes to {branch} are not allowed; push to a PR branch"
-    paths = [f.get("path", "") for f in a.get("files", []) if isinstance(f, dict)]
-    if a.get("path"):
-        paths.append(a["path"])
-    for path in paths:
-        if path.lstrip("/").startswith(PROTECTED_PATHS):
-            return f"{path} is a protected path"
-    return None
+    """Return a denial reason, or None to allow (rules in policy.py)."""
+    if _diagnosis_only & _active:
+        return "a time-correlated incident is being investigated: diagnosis only"
+    return policy.check(tool, a)
 
 
 @app.post("/hitl/policy")
@@ -149,19 +245,23 @@ async def manual(req: Request):
     return start(ev, force=True)
 
 
-def start(ev: dict, force: bool = False) -> dict:
+def start(ev: dict, force: bool = False, ctx: dict | None = None) -> dict:
     # Idempotency: Rollouts can re-send; one investigation per (env, image) per 30 min.
     if not force and (prior := ledger.recent_investigation(ev["env"], ev["image"])):
         log.info("  skip: investigation #%s already covers %s/%s", prior["id"], ev["env"], ev["image"])
         return {"skipped": prior["id"]}
     inv_id = ledger.start_investigation(ev)
-    t = asyncio.create_task(run(inv_id, ev))
+    if ctx and incidents:
+        incidents.link_investigation(ctx["incident_id"], inv_id)
+        if ctx.get("diagnosis_only"):
+            _diagnosis_only.add(inv_id)
+    t = asyncio.create_task(run(inv_id, ev, ctx))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
     return {"investigation": inv_id}
 
 
-async def run(inv_id: int, ev: dict):
+async def run(inv_id: int, ev: dict, ctx: dict | None = None):
     log.info("▶ investigation #%d: %s canary %s (%s)", inv_id, ev["env"], ev.get("canaryHash"), ev["image"])
 
     def on_step(step: dict):
@@ -173,20 +273,41 @@ async def run(inv_id: int, ev: dict):
 
     _active.add(inv_id)
     try:
-        report = await asyncio.wait_for(investigate(ev, ledger, on_step), timeout=900)
+        report = await asyncio.wait_for(investigate(ev, ledger, on_step, ctx), timeout=900)
         ledger.finish_investigation(inv_id, "done", report=report.model_dump())
+        if ctx and incidents:
+            incidents.on_report(ctx["incident_id"], report.model_dump())
         log.info("✔ #%d %s → %s", inv_id, report.action, report.pr_url)
         log.info("  ROOT CAUSE: %s", report.root_cause)
     except Exception as e:  # noqa: BLE001 — surface everything on stage
         log.exception("✘ #%d failed", inv_id)
         ledger.finish_investigation(inv_id, "error", error=f"{type(e).__name__}: {e}")
+        if ctx and incidents:
+            incidents.on_investigation_error(ctx["incident_id"], f"{type(e).__name__}: {e}")
     finally:
         _active.discard(inv_id)
+        _diagnosis_only.discard(inv_id)
 
 
 @app.get("/api/state")
 def state():
     return {"releases": ledger.releases(), "investigations": ledger.investigations()}
+
+
+@app.get("/api/incidents")
+def list_incidents(limit: int = 50, status: str | None = None):
+    if not incidents:
+        return {"enabled": False, "incidents": []}
+    return {"enabled": True, "incidents": ledger.incidents(limit, status)}
+
+
+@app.get("/api/incidents/{inc_id}")
+def get_incident_api(inc_id: int):
+    inc = ledger.incident(inc_id) if incidents else None
+    if not inc:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    patterns = ledger.patterns_for_hash(inc["env"], inc["pod_hash"]) if inc.get("pod_hash") else []
+    return {**inc, "events": ledger.incident_events(inc_id), "patterns": patterns}
 
 
 @app.get("/healthz")
