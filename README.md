@@ -87,3 +87,16 @@ Change the model with `AI_SRE_MODEL` in `ai-sre/.env`.
 6. **Human merge**: the merge is the promotion.
 
 The agent has no Kubernetes credentials. Telemetry is treated as untrusted input.
+
+## Incident memory (preview, off by default)
+
+Beyond single rollbacks, the AI SRE can keep an incident memory: it tracks every commit on `main`,
+mines error logs into templates per ReplicaSet, opens incidents with a signature, matches them
+against past incidents, hands the agent a specialised skill (`ai-sre/skills/`), and, for a pattern it
+has seen resolved by a revert, opens a revert PR deterministically while the agent prepares the real fix.
+Humans still merge everything. Only failures attributed by the canary's pod-template-hash are ever
+reverted; failures correlated by time alone are diagnosis only.
+
+Design and safety rules: [`docs/prd-incident-memory.md`](docs/prd-incident-memory.md).
+Switch it on with `INCIDENTS_ENABLED=true` in `ai-sre/k8s.yaml`; the incidents page is at `/incidents` in the demo UI.
+Tests: `cd ai-sre && pip install -r requirements.txt -r requirements-dev.txt && pytest`.
