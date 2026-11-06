@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = (Path(__file__).parent / "index.html").read_bytes()
+INCIDENTS_PAGE = (Path(__file__).parent / "incidents.html").read_bytes()
 PORT = int(os.environ.get("DEMO_UI_PORT", "8099"))
 AI_SRE = os.environ.get("AI_SRE_URL", "http://localhost:8088")
 PROM = {"staging": "http://localhost:9090", "prod": "http://localhost:9091"}
@@ -309,6 +310,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dict(_snap))
         if self.path == "/api/run":
             return self._send(200, _run)
+        # Incident memory (separate page; the stage page is unchanged). Read-only proxy to the AI SRE.
+        if self.path in ("/incidents", "/incidents.html"):
+            return self._send(200, INCIDENTS_PAGE, "text/html; charset=utf-8")
+        if self.path == "/api/incidents":
+            return self._send(200, http_json(f"{AI_SRE}/api/incidents") or {"enabled": False, "incidents": []})
+        if self.path.startswith("/api/incidents/") and self.path.rsplit("/", 1)[-1].isdigit():
+            return self._send(200, http_json(f"{AI_SRE}/api/incidents/{self.path.rsplit('/', 1)[-1]}"))
         self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802

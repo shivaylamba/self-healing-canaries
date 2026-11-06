@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incident Memory</title>
+<style>
+:root {
+  --bg: #0b0f17; --panel: #121826; --panel2: #0f1521; --line: #253048; --fg: #e8edf6; --mut: #8b97ad;
+  --ok: #3ddc84; --bad: #ff5d5d; --warn: #ffb547; --acc: #5ab0ff; --pur: #c79bff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+code, .mono { font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+a { color: var(--acc); }
+header { display: flex; align-items: baseline; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { margin: 0; font-size: 22px; }
+header .sub { color: var(--mut); font-size: 13px; }
+header .right { margin-left: auto; color: var(--mut); font-size: 12px; }
+main { display: grid; grid-template-columns: minmax(320px, 1fr) 2fr; gap: 14px; padding: 14px 18px; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+.panel h2 { margin: 0 0 8px; font-size: 15px; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.kpi .v { font-size: 20px; font-weight: 700; } .kpi .k { font-size: 11px; color: var(--mut); text-transform: uppercase; letter-spacing: .6px; }
+.inc { padding: 8px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; cursor: pointer; background: var(--panel2); }
+.inc:hover, .inc.sel { border-color: var(--acc); }
+.inc .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inc .meta { color: var(--mut); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+.badge { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 10px; background: #ffffff14; }
+.badge.open { color: var(--bad); } .badge.mitigating { color: var(--warn); } .badge.resolved { color: var(--ok); }
+.badge.guarded { color: var(--pur); } .badge.closed { color: var(--mut); }
+.badge.hash { color: var(--ok); } .badge.temporal { color: var(--warn); } .badge.recur { color: var(--bad); }
+.env { font-size: 11px; font-weight: 700; } .env.staging { color: var(--acc); } .env.prod { color: var(--warn); }
+dl { display: grid; grid-template-columns: 150px 1fr; gap: 4px 10px; margin: 0 0 12px; }
+dt { color: var(--mut); font-size: 12px; } dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { dl { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(2, 1fr); } }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--acc); margin: 14px 0 6px; }
+table { width: 100%; border-collapse: collapse; } td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 12px; vertical-align: top; }
+th { color: var(--mut); font-weight: 600; }
+.tl { list-style: none; margin: 0; padding: 0; } .tl li { padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+.tl .k { font-weight: 700; } .tl code { overflow-wrap: anywhere; word-break: break-word; } .tl .t { color: var(--mut); margin-right: 6px; }
+.mut { color: var(--mut); }
+.table-wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Incident Memory</h1>
+  <span class="sub">Changes · log patterns · signatures · skills · reverts. Read-only view of the AI SRE.</span>
+  <span class="right"><a href="/">← stage view</a> · <span id="upd">loading…</span></span>
+</header>
+<main>
+  <section class="panel">
+    <div class="kpis" id="kpis"></div>
+    <h2>Incidents</h2>
+    <div id="list"><p class="mut">Loading…</p></div>
+  </section>
+  <section class="panel" id="detail"><p class="mut">Select an incident.</p></section>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const t = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "—";
+const dur = (a, b) => (a && b) ? `${Math.round((b - a) / 60)} min` : "—";
+const pr = (n) => n ? `#${esc(n)}` : "—";
+let selected = null;
+
+async function getJSON(u) { try { const r = await fetch(u, {cache: "no-store"}); return await r.json(); } catch { return {}; } }
+
+function kpis(list) {
+  const done = list.filter((i) => i.resolved_ts);
+  const mttr = done.length ? Math.round(done.reduce((s, i) => s + (i.resolved_ts - i.opened_ts), 0) / done.length / 60) + " min" : "—";
+  const guarded = done.length ? Math.round(100 * done.filter((i) => i.status === "guarded").length / done.length) + "%" : "—";
+  const recur = list.filter((i) => i.recurrence_of).length;
+  const open = list.filter((i) => ["open", "mitigating"].includes(i.status)).length;
+  document.getElementById("kpis").innerHTML = [["open", open], ["MTTR", mttr], ["guarded", guarded], ["recurrences", recur]]
+    .map(([k, v]) => `<div class="kpi"><div class="v">${esc(v)}</div><div class="k">${esc(k)}</div></div>`).join("");
+}
+
+function row(i) {
+  const sl = Object.entries(i.signature?.slice || {}).map(([k, v]) => `${k.replace("checkout_", "")}=${v}`).join(", ");
+  return `<div class="inc ${i.id === selected ? "sel" : ""}" data-id="${i.id}">
+    <div class="top"><b>#${i.id}</b> <span class="env ${esc(i.env)}">${esc(i.env).toUpperCase()}</span>
+      <span class="badge ${esc(i.status)}">${esc(i.status)}</span>
+      <span class="badge ${esc(i.attribution)}">${esc(i.attribution)}</span>
+      ${i.recurrence_of ? `<span class="badge recur">recurs #${esc(i.recurrence_of)}</span>` : ""}</div>
+    <div class="meta">${esc(i.skill || "")}${sl ? " · " + esc(sl) : ""} · ${esc((i.signature?.error_types || []).join(", "))}</div>
+    <div class="meta">${t(i.opened_ts)} · fix ${pr(i.fix_pr)} · revert ${pr(i.revert_pr)}</div></div>`;
+}
+
+async function showDetail(id) {
+  selected = id;
+  const d = await getJSON(`/api/incidents/${id}`);
+  if (!d.id) { document.getElementById("detail").innerHTML = `<p class="mut">Not found.</p>`; return; }
+  const sig = d.signature || {};
+  const pats = (d.patterns || []).map((p) => `<tr><td><code>${esc(p.template)}</code></td><td>${esc(p.error_type)}</td><td>${p.count}</td>
+      <td>${esc(Object.entries(p.slices || {}).map(([k, v]) => k.replace("checkout_", "") + ": " + Object.entries(v).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([x, n]) => `${x} ${n}`).join(", ")).join(" · "))}</td></tr>`).join("");
+  const events = (d.events || []).map((e) => `<li><span class="t">${t(e.ts)}</span><span class="k">${esc(e.kind)}</span> <code>${esc(JSON.stringify(e.detail))}</code></li>`).join("");
+  document.getElementById("detail").innerHTML = `
+    <h2>Incident #${d.id} <span class="badge ${esc(d.status)}">${esc(d.status)}</span></h2>
+    <dl>
+      <dt>Environment</dt><dd><span class="env ${esc(d.env)}">${esc(d.env)}</span> · trigger ${esc(d.trigger)}</dd>
+      <dt>Attribution</dt><dd><span class="badge ${esc(d.attribution)}">${esc(d.attribution)}</span>
+        <span class="mut">${d.attribution === "hash" ? "proven by the canary ReplicaSet's pod-template-hash" : "correlated by time only: never auto-reverted"}</span></dd>
+      <dt>Image / hash</dt><dd><code>${esc((d.image || "").split("/").pop())}</code> · <code>${esc(d.pod_hash)}</code></dd>
+      <dt>Commit / PR</dt><dd><code>${esc((d.git_sha || "").slice(0, 7))}</code> · source ${pr(d.source_pr)}</dd>
+      <dt>Skill</dt><dd>${esc(d.skill)}</dd>
+      <dt>Matched</dt><dd>${d.matched_incident_id ? `#${d.matched_incident_id} (similarity ${esc(d.similarity)})` : "—"}${d.recurrence_of ? ` · <b>recurrence of #${d.recurrence_of}</b>` : ""}</dd>
+      <dt>Fix / revert</dt><dd>fix ${pr(d.fix_pr)} · revert ${pr(d.revert_pr)} · resolution ${esc(d.resolution || "—")}</dd>
+      <dt>Time to resolve</dt><dd>${dur(d.opened_ts, d.resolved_ts)} ${d.guard_added ? "· guard added" : ""}</dd>
+    </dl>
+    <h3>Signature</h3>
+    <dl>
+      <dt>Error types</dt><dd>${esc((sig.error_types || []).join(", ") || "—")}</dd>
+      <dt>Slice</dt><dd>${esc(Object.entries(sig.slice || {}).map(([k, v]) => `${k}=${v}`).join(", ") || "—")}</dd>
+      <dt>Change</dt><dd>${esc((sig.path_kinds || []).join(", "))} in ${esc((sig.dirs || []).join(", ") || "—")}</dd>
+    </dl>
+    <h3>Log patterns on this ReplicaSet</h3>
+    <div class="table-wrap"><table><tr><th>template</th><th>error type</th><th>n</th><th>top slices</th></tr>${pats || `<tr><td colspan="4" class="mut">none recorded</td></tr>`}</table></div>
+    <h3>Timeline</h3><ul class="tl">${events}</ul>`;
+  document.querySelectorAll(".inc").forEach((el) => el.classList.toggle("sel", Number(el.dataset.id) === id));
+}
+
+async function refresh() {
+  const d = await getJSON("/api/incidents");
+  const list = d.incidents || [];
+  kpis(list);
+  document.getElementById("list").innerHTML = d.enabled === false
+    ? `<p class="mut">Incident memory is off. Set <code>INCIDENTS_ENABLED=true</code> in <code>ai-sre/k8s.yaml</code>.</p>`
+    : (list.map(row).join("") || `<p class="mut">No incidents yet.</p>`);
+  document.querySelectorAll(".inc").forEach((el) => el.onclick = () => showDetail(Number(el.dataset.id)));
+  if (selected) showDetail(selected);
+  document.getElementById("upd").textContent = "updated " + new Date().toLocaleTimeString();
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
