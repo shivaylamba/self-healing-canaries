@@ -14,7 +14,7 @@ patches:
 images:
   - name: payment
     newName: ghcr.io/shivaylamba/scn-payment
-    newTag: sha-44c38f1
+    newTag: sha-1e4a2ab
   - name: inventory
     newName: ghcr.io/shivaylamba/scn-inventory
     newTag: v1.0.0
