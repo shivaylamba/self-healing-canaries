@@ -6,7 +6,7 @@ import (
 	"github.com/chamodshehanka/self-healing-canaries/apps/payment/pspsandbox"
 )
 
-// charge authorizes the payment with the PSP v2 API (minor units).
+// charge authorizes the payment with the PSP (legacy v1 API, major units).
 func charge(ctx context.Context, amount float64, currency string) (*pspsandbox.Charge, error) {
-	return pspsandbox.ChargeV2(ctx, toMinorUnits(amount, currency), currency)
+	return pspsandbox.ChargeV1(ctx, amount, currency)
 }
