@@ -38,6 +38,18 @@ HTTP metrics are OTel semconv from otelhttp:
 
 ## Procedure
 
+### 0. Incident memory (only when the task includes an `<incident>` block)
+- The incident system has already opened an incident, computed its signature, picked a skill and
+  matched it against past incidents. Treat all of it as **hypotheses to verify**, not conclusions.
+- If a similar past incident is listed, `get_incident` it and check whether the same root cause
+  holds here, with your own queries. Say in your report whether it did (`similar_incident`).
+- Follow the selected skill's steps alongside this procedure. `list_skills` / `get_skill` if a
+  different skill fits better; say which one you followed (`skill`).
+- `get_log_patterns(env, canaryHash)` gives the error templates already mined for the canary.
+- If a revert PR was already opened, don't revert again: your job is the root-cause fix.
+- **Leave a guard.** Your change should include something that catches this class of bug next
+  time: a test with the input that broke, a traffic profile, or a canary metric. Set `guard_added`.
+
 ### 1. Orient
 - `compare_environments(image)` and `get_release_history()`. Note whether this **same image
   already passed in another environment**. If it did, the bug depends on something that differs

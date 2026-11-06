@@ -10,6 +10,16 @@ kind: Namespace
 metadata:
   name: ai-sre
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-sre-data
+  namespace: ai-sre
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,6 +42,13 @@ spec:
         - secretRef: {name: ai-sre-env}
         env:
         - {name: AURA_URL, value: "http://localhost:8090"}
+        # Incident memory (docs/prd-incident-memory.md). Off by default.
+        - {name: INCIDENTS_ENABLED, value: "false"}
+        - {name: AUTO_REVERT_PR, value: "false"}
+        - {name: PROACTIVE_INVESTIGATE, value: "false"}
+        - {name: GRAFANA_URL, value: "http://grafana.observability:3000"}
+        - {name: GRAFANA_USERNAME, value: admin}
+        - {name: GRAFANA_PASSWORD, value: admin}
         ports:
         - containerPort: 8080
         readinessProbe:
@@ -63,8 +80,8 @@ spec:
         - {name: GRAFANA_USERNAME, value: admin}
         - {name: GRAFANA_PASSWORD, value: admin}
       volumes:
-      - name: data
-        emptyDir: {}
+      - name: data              # the ledger and incident memory must survive restarts
+        persistentVolumeClaim: {claimName: ai-sre-data}
       - name: aura-config
         configMap: {name: aura-config}
 ---

@@ -65,6 +65,8 @@ nudge_last_turn = true
 mcp_filter = [
   # ledger
   "get_release_history", "compare_environments",
+  # incident memory (same ledger MCP server; return "disabled" unless INCIDENTS_ENABLED=true)
+  "get_incident", "find_similar_incidents", "get_log_patterns", "get_recent_changes", "list_skills", "get_skill",
   # grafana (server already runs with --disable-write)
   "list_datasources", "query_prometheus", "list_prometheus_*", "query_loki_*", "list_loki_*",
   # github, read
