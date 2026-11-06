@@ -9,3 +9,4 @@ slides/.slidev/
 ai-sre/.aura-rendered.toml
 .demo-ui.pid
 .demo-ui.log
+.pytest_cache/

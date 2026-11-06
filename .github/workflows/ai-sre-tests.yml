@@ -1,0 +1,20 @@
+name: ai-sre-tests
+on:
+  pull_request:
+    paths: ["ai-sre/**"]
+  push:
+    branches: [main]
+    paths: ["ai-sre/**"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-sre
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - run: pip install -r requirements.txt -r requirements-dev.txt
+    - run: python -m pytest -q
