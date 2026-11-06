@@ -5,6 +5,6 @@ kind: Rollout
 metadata:
   name: payment
   annotations:
-    scn.dev/git-sha: baseline
-    scn.dev/source-pr: ""
-    scn.dev/source-branch: main
+    scn.dev/git-sha: "4642bc0"
+    scn.dev/source-pr: "10"
+    scn.dev/source-branch: "feat/inventory-v2-psp-v2"
