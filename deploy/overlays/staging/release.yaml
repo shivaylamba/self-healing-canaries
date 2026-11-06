@@ -5,6 +5,6 @@ kind: Rollout
 metadata:
   name: payment
   annotations:
-    scn.dev/git-sha: "abcbda7"
-    scn.dev/source-pr: "8"
-    scn.dev/source-branch: "ai-sre/fix-4e37cbb-prod"
+    scn.dev/git-sha: baseline
+    scn.dev/source-pr: ""
+    scn.dev/source-branch: main
