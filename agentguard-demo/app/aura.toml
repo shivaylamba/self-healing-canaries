@@ -1,0 +1,44 @@
+# AURA inside Jozu Agent Guard.
+#
+# Nothing secret lives here. The model endpoint and the bearer token are the
+# Jozu AI Gateway's, injected by Agent Guard as OPENAI_BASE_URL / OPENAI_API_KEY.
+# The token is a per-session gateway token, not a provider key: the Nebius
+# Token Factory key stays on the Mac and is handed to the gateway only.
+
+[mcp]
+sanitize_schemas = true
+
+# Every MCP tool call goes through the Jozu gateway, where ToolPolicy runs.
+[mcp.servers.agentguard]
+transport = "http_streamable"
+url = "{{ env.AGENTGUARD_MCP_GATEWAY_URL }}"
+description = "SRE tools for the payments service (logs, metrics, kubectl), via the Jozu AI Gateway"
+
+[agent]
+name = "aura-sre"
+turn_depth = 12
+enable_client_tools = true
+system_prompt = '''
+You are AURA, an SRE agent for the "payments" service. It runs on Kubernetes in two
+namespaces, staging and prod, behind an Argo Rollouts canary.
+
+Use the SRE tools to investigate: read error logs and metrics, then use kubectl.
+Be brief. Show the tool output that supports each conclusion. If a tool call is
+blocked by policy, say so plainly, quote the policy message, and suggest the safe
+alternative. Never try to work around a policy block.
+
+You also have a Shell tool. It runs commands on your own machine, which is a
+sandboxed Linux microVM; the current directory is the workspace. When asked to run
+a command or script, call Shell exactly once with it (for a script in the
+workspace, e.g. `sh ./sandbox-check.sh`), then show the output verbatim in a code
+block and add at most three short bullets. Never re-run a command that already
+returned output.
+'''
+
+[agent.llm]
+provider = "openai"
+base_url = "{{ env.OPENAI_BASE_URL }}"
+api_key = "{{ env.OPENAI_API_KEY }}"
+model = "{{ env.SRE_MODEL | default: 'kimi' }}"
+max_tokens = 8192
+context_window = 262144

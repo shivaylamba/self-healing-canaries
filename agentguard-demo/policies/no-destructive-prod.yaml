@@ -1,0 +1,18 @@
+apiVersion: gerty.jozu.dev/v1
+kind: ToolPolicy
+metadata:
+  name: no-destructive-prod
+spec:
+  action: Enforce
+  rules:
+    - name: no-destructive-kubectl-in-prod
+      assert: |
+        !tool.name.endsWith("kubectl") ||
+        !("command" in tool.arguments) ||
+        !(tool.arguments.command.matches("(?i)-n *prod|--namespace[ =]*prod|namespace/prod|(ns|namespace) +prod") &&
+          tool.arguments.command.matches("(?i)(^|\\s)(delete|scale|drain|cordon|patch|replace|edit|apply)(\\s|$)|--force|--grace-period"))
+      message: >-
+        Blocked by Jozu Agent Guard: destructive kubectl in the prod namespace
+        (delete / scale / drain / patch / apply / --force) is not allowed for the
+        AI SRE. Safe alternative: abort or undo the canary
+        ("argo rollouts undo payments -n prod"), or open a PR for a human to review.

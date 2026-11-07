@@ -1,0 +1,35 @@
+apiVersion: agentguard.jozu.dev/v1
+kind: AgentDefinition
+metadata:
+  name: aura-sre
+spec:
+  # AURA (mezmo/aura) CLI + SRE tools, built from ../app.
+  framework: 127.0.0.1:5050/demo/aura-sre:v1
+
+  needs:
+    # Read from the Mac's environment; goes to the Jozu gateway only, never into the VM.
+    - name: NEBIUS_API_KEY
+
+  includes:
+    # The only model AURA may call. AURA asks for "kimi"; the gateway maps it to
+    # Kimi K3.1 Pro on Nebius Token Factory and adds the key.
+    - name: kimi
+      type: llm
+      source:
+        model: openai/moonshotai/Kimi-K3.1-Pro
+        endpoint: https://api.tokenfactory.nebius.com
+      credential: NEBIUS_API_KEY
+
+    # SRE tools (logs, metrics, kubectl), served from the laptop (the "cluster
+    # API" side). Every call passes the gateway's ToolPolicy before it leaves the VM.
+    - name: sre
+      type: mcp
+      source:
+        endpoint: http://192.168.127.254:7070/mcp
+      transport: http
+
+    # Guardrails for the agent, shipped with the definition so they cannot be skipped.
+    - name: sre-guardrails
+      type: policy
+      source:
+        modelkit: 127.0.0.1:5050/demo/aura-sre-policies:v1

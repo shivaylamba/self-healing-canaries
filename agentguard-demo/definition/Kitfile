@@ -1,0 +1,7 @@
+manifestVersion: 1.0.0
+package:
+  name: aura-sre
+  version: 1.0.0
+  description: AURA SRE agent running inside Jozu Agent Guard
+code:
+  - path: agent-definition.yaml

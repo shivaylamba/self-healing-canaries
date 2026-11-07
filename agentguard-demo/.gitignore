@@ -1,0 +1,4 @@
+.venv/
+app/aura-linux-arm64
+app/checksums.txt
+workspace/.aura/aura.log

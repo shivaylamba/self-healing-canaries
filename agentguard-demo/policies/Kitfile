@@ -1,0 +1,7 @@
+manifestVersion: 1.0.0
+package:
+  name: aura-sre-policies
+  version: 1.0.0
+  description: ToolPolicy for the AURA SRE demo
+code:
+  - path: no-destructive-prod.yaml
