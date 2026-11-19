@@ -22,29 +22,32 @@ func newInventoryClient(baseURL string) *inventoryClient {
 	}
 }
 
-// stockV1 is the v1 response: inventory aggregates all warehouses server-side.
-type stockV1 struct {
+// stockV2 is the v2 response. v1 is deprecated; v2 skips server-side aggregation.
+type stockV2 struct {
 	SKU       string `json:"sku"`
-	Available int    `json:"available"`
+	Available *int   `json:"available"`
 }
 
 // Available returns the total sellable quantity for sku.
 func (c *inventoryClient) Available(ctx context.Context, sku string) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/stock/"+sku, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v2/stock/"+sku, nil)
 	if err != nil {
 		return 0, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("inventory v1: %w", err)
+		return 0, fmt.Errorf("inventory v2: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("inventory v1: status %d for sku %s", resp.StatusCode, sku)
+		return 0, fmt.Errorf("inventory v2: status %d for sku %s", resp.StatusCode, sku)
 	}
-	var s stockV1
+	var s stockV2
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return 0, fmt.Errorf("inventory v1: decode: %w", err)
+		return 0, fmt.Errorf("inventory v2: decode: %w", err)
 	}
-	return s.Available, nil
+	if s.Available == nil {
+		return 0, fmt.Errorf("inventory v2: response for sku %s has no 'available' field", sku)
+	}
+	return *s.Available, nil
 }
