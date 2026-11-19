@@ -19,6 +19,29 @@ func TestInventoryAvailable(t *testing.T) {
 	}
 }
 
+func TestInventoryAvailableMultiWarehouse(t *testing.T) {
+	inv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"sku":"sku-7","warehouses":[{"id":"sin-1","available":20},{"id":"nrt-1","available":25}]}`))
+	}))
+	defer inv.Close()
+
+	got, err := newInventoryClient(inv.URL).Available(context.Background(), "sku-7")
+	if err != nil || got != 45 {
+		t.Fatalf("Available() = %d, %v; want 45, nil", got, err)
+	}
+}
+
+func TestToMinorUnits(t *testing.T) {
+	for _, tc := range []struct {
+		amount float64
+		want   int64
+	}{{12.50, 1250}, {0.99, 99}, {299.99, 29999}} {
+		if got := toMinorUnits(tc.amount); got != tc.want {
+			t.Errorf("toMinorUnits(%v) = %d; want %d", tc.amount, got, tc.want)
+		}
+	}
+}
+
 func TestChargeUSD(t *testing.T) {
 	c, err := charge(context.Background(), 12.50, "USD")
 	if err != nil {
