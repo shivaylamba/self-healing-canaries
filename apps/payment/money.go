@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// toMinorUnits converts a major-unit amount using the PSP v2 API's ISO 4217 exponent.
+// toMinorUnits converts a major-unit amount using the PSP's ISO 4217 exponent.
 func toMinorUnits(amount float64, currency string) int64 {
 	switch strings.ToUpper(currency) {
 	case "JPY", "KRW":
